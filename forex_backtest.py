@@ -1,13 +1,9 @@
 """
-Forex Backtesting Engine
-Command-line tool for running multiple strategies across different years and currency pairs
+Forex Backtesting Engine - Interactive Mode
+Interactive command-line tool for running multiple strategies across different years and currency pairs
 Exports results to CSV for comparison and analysis
-
-Usage:
-python3 backtest_engine.py --years 2021,2022,2023 --pairs EUR/USD,GBP/USD --strategies ma,meanrev --output results.csv
 """
 
-import argparse
 from ib_insync import *
 import pandas as pd
 import numpy as np
@@ -369,81 +365,166 @@ class BacktestEngine:
         return results
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description='Forex Backtesting Engine',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Test MA crossover on EUR/USD for 2022
-  python3 backtest_engine.py --years 2022 --pairs EUR/USD --strategies ma
-  
-  # Test both strategies on multiple pairs across multiple years
-  python3 backtest_engine.py --years 2021,2022,2023 --pairs EUR/USD,GBP/USD,USD/JPY --strategies ma,meanrev
-  
-  # Test all available pairs
-  python3 backtest_engine.py --years 2022 --pairs all --strategies ma,meanrev --output results.csv
-        """
-    )
+def get_user_input():
+    """Interactive prompts to get user configuration"""
+    print("\n" + "="*70)
+    print("FOREX BACKTESTING ENGINE - INTERACTIVE MODE")
+    print("="*70 + "\n")
     
-    parser.add_argument('--years', required=True, 
-                       help='Comma-separated years (e.g., 2021,2022,2023)')
-    parser.add_argument('--pairs', required=True,
-                       help='Comma-separated currency pairs (e.g., EUR/USD,GBP/USD) or "all"')
-    parser.add_argument('--strategies', required=True,
-                       help='Comma-separated strategies: ma (moving average) and/or meanrev (mean reversion)')
-    parser.add_argument('--output', default='backtest_results.csv',
-                       help='Output CSV filename (default: backtest_results.csv)')
-    parser.add_argument('--capital', type=float, default=10000,
-                       help='Initial capital (default: 10000)')
-    parser.add_argument('--max-positions', type=int, default=3,
-                       help='Max concurrent positions (default: 3)')
-    parser.add_argument('--stop-loss', type=float, default=3,
-                       help='Stop loss percentage (default: 3)')
+    # Year selection
+    print("STEP 1: Select Years to Test")
+    print("-" * 40)
+    print("Available years: 2020, 2021, 2022, 2023, 2024")
+    print("Enter years separated by commas (e.g., 2021,2022,2023)")
+    print("Or enter 'all' for 2020-2024")
+    years_input = input("Years: ").strip()
     
-    args = parser.parse_args()
-    
-    # Parse arguments
-    years = [int(y.strip()) for y in args.years.split(',')]
-    
-    engine = BacktestEngine(
-        initial_capital=args.capital,
-        max_positions=args.max_positions,
-        stop_loss_pct=args.stop_loss
-    )
-    
-    if args.pairs.lower() == 'all':
-        pairs = list(engine.all_pairs.keys())
+    if years_input.lower() == 'all':
+        years = [2020, 2021, 2022, 2023, 2024]
     else:
-        pairs = [p.strip() for p in args.pairs.split(',')]
+        try:
+            years = [int(y.strip()) for y in years_input.split(',')]
+        except:
+            print("Invalid input. Using default: 2022")
+            years = [2022]
     
-    strategies = [s.strip().lower() for s in args.strategies.split(',')]
+    print(f"✓ Selected years: {', '.join(map(str, years))}\n")
     
-    # Validate strategies
-    valid_strategies = {'ma', 'meanrev'}
-    for strat in strategies:
-        if strat not in valid_strategies:
-            print(f"Error: Invalid strategy '{strat}'. Must be 'ma' or 'meanrev'")
-            sys.exit(1)
+    # Currency pair selection
+    print("STEP 2: Select Currency Pairs")
+    print("-" * 40)
+    print("Available pairs:")
+    print("  Majors: EUR/USD, USD/CAD, GBP/USD, AUD/USD, USD/JPY, USD/CHF, NZD/USD")
+    print("  Crosses: EUR/GBP, EUR/JPY, GBP/JPY, AUD/CAD, NZD/CAD, EUR/CHF, GBP/CHF")
+    print("  Emerging: USD/MXN, USD/ZAR")
+    print("\nEnter pairs separated by commas (e.g., EUR/USD,GBP/USD)")
+    print("Or enter 'majors' for all major pairs")
+    print("Or enter 'all' for all 16 pairs")
+    pairs_input = input("Pairs: ").strip()
+    
+    all_pairs = [
+        'EUR/USD', 'USD/CAD', 'GBP/USD', 'AUD/USD', 'USD/JPY', 'USD/CHF', 'NZD/USD',
+        'EUR/GBP', 'EUR/JPY', 'GBP/JPY', 'AUD/CAD', 'NZD/CAD', 'EUR/CHF', 'GBP/CHF',
+        'USD/MXN', 'USD/ZAR'
+    ]
+    major_pairs = ['EUR/USD', 'USD/CAD', 'GBP/USD', 'AUD/USD', 'USD/JPY', 'USD/CHF', 'NZD/USD']
+    
+    if pairs_input.lower() == 'all':
+        pairs = all_pairs
+    elif pairs_input.lower() == 'majors':
+        pairs = major_pairs
+    else:
+        pairs = [p.strip() for p in pairs_input.split(',')]
+    
+    print(f"✓ Selected {len(pairs)} pairs: {', '.join(pairs[:3])}{'...' if len(pairs) > 3 else ''}\n")
+    
+    # Strategy selection
+    print("STEP 3: Select Strategies")
+    print("-" * 40)
+    print("Available strategies:")
+    print("  1. ma       - Moving Average Crossover (50/200 hour)")
+    print("  2. meanrev  - Mean Reversion (RSI + Bollinger Bands)")
+    print("  3. both     - Run both strategies")
+    strategies_input = input("Strategy (ma/meanrev/both): ").strip().lower()
+    
+    if strategies_input == 'both':
+        strategies = ['ma', 'meanrev']
+    elif strategies_input in ['ma', 'meanrev']:
+        strategies = [strategies_input]
+    else:
+        print("Invalid input. Using default: both")
+        strategies = ['ma', 'meanrev']
+    
+    print(f"✓ Selected strategies: {', '.join(strategies)}\n")
+    
+    # Risk parameters
+    print("STEP 4: Risk Parameters (Optional - Press Enter for defaults)")
+    print("-" * 40)
+    
+    capital_input = input("Initial capital [$10,000]: ").strip()
+    capital = float(capital_input) if capital_input else 10000
+    
+    max_pos_input = input("Max concurrent positions [3]: ").strip()
+    max_positions = int(max_pos_input) if max_pos_input else 3
+    
+    stop_loss_input = input("Stop loss percentage [3%]: ").strip()
+    stop_loss = float(stop_loss_input) if stop_loss_input else 3
+    
+    print(f"✓ Capital: ${capital:,.2f} | Max Positions: {max_positions} | Stop Loss: {stop_loss}%\n")
+    
+    # Output file
+    print("STEP 5: Output File")
+    print("-" * 40)
+    output_input = input("CSV filename [backtest_results.csv]: ").strip()
+    output_file = output_input if output_input else 'backtest_results.csv'
+    
+    print(f"✓ Results will be saved to: {output_file}\n")
+    
+    # Confirmation
+    total_tests = len(years) * len(pairs) * len(strategies)
+    print("="*70)
+    print("CONFIGURATION SUMMARY")
+    print("="*70)
+    print(f"Years: {len(years)} ({', '.join(map(str, years))})")
+    print(f"Pairs: {len(pairs)}")
+    print(f"Strategies: {len(strategies)} ({', '.join(strategies)})")
+    print(f"Total tests: {total_tests}")
+    print(f"Risk: ${capital:,.2f} capital, {max_positions} max positions, {stop_loss}% stop loss")
+    print(f"Output: {output_file}")
+    print("="*70)
+    
+    confirm = input("\nProceed with backtest? (yes/no): ").strip().lower()
+    if confirm not in ['yes', 'y']:
+        print("Backtest cancelled.")
+        sys.exit(0)
+    
+    return {
+        'years': years,
+        'pairs': pairs,
+        'strategies': strategies,
+        'capital': capital,
+        'max_positions': max_positions,
+        'stop_loss': stop_loss,
+        'output_file': output_file
+    }
+
+
+def main():
+    # Get user configuration interactively
+    config = get_user_input()
+    
+    # Initialize engine
+    engine = BacktestEngine(
+        initial_capital=config['capital'],
+        max_positions=config['max_positions'],
+        stop_loss_pct=config['stop_loss']
+    )
     
     # Connect to TWS
+    print("\nConnecting to Interactive Brokers TWS...")
     if not engine.connect_tws():
+        print("Failed to connect. Make sure TWS is running.")
         sys.exit(1)
     
     try:
         # Run backtests
-        results = engine.run_backtest_suite(years, pairs, strategies)
+        results = engine.run_backtest_suite(
+            config['years'], 
+            config['pairs'], 
+            config['strategies']
+        )
         
         # Export to CSV
         if results:
             df_results = pd.DataFrame(results)
-            df_results.to_csv(args.output, index=False)
+            df_results.to_csv(config['output_file'], index=False)
             print(f"\n{'='*70}")
-            print(f"✓ Results exported to {args.output}")
+            print(f"✓ Results exported to {config['output_file']}")
             print(f"{'='*70}\n")
             
             # Print summary table
             print("SUMMARY BY STRATEGY:")
+            print("-" * 70)
             summary = df_results.groupby('strategy').agg({
                 'total_return_pct': 'mean',
                 'num_trades': 'sum',
@@ -451,9 +532,24 @@ Examples:
             }).round(2)
             print(summary)
             
-            print("\nTOP 5 PERFORMERS:")
-            top5 = df_results.nlargest(5, 'total_return_pct')[['year', 'pair', 'strategy', 'total_return_pct', 'num_trades']]
+            print("\n\nSUMMARY BY YEAR:")
+            print("-" * 70)
+            year_summary = df_results.groupby('year').agg({
+                'total_return_pct': 'mean',
+                'num_trades': 'sum',
+                'win_rate': 'mean'
+            }).round(2)
+            print(year_summary)
+            
+            print("\n\nTOP 5 BEST PERFORMERS:")
+            print("-" * 70)
+            top5 = df_results.nlargest(5, 'total_return_pct')[['year', 'pair', 'strategy', 'total_return_pct', 'num_trades', 'win_rate']]
             print(top5.to_string(index=False))
+            
+            print("\n\nTOP 5 WORST PERFORMERS:")
+            print("-" * 70)
+            bottom5 = df_results.nsmallest(5, 'total_return_pct')[['year', 'pair', 'strategy', 'total_return_pct', 'num_trades', 'win_rate']]
+            print(bottom5.to_string(index=False))
             
         else:
             print("\n✗ No results generated")
@@ -461,6 +557,7 @@ Examples:
     finally:
         engine.disconnect()
         print("\n✓ Disconnected from TWS")
+        print("\nBacktest complete! Check the CSV file for detailed results.")
 
 
 if __name__ == "__main__":
