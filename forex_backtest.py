@@ -1,8 +1,9 @@
 """
-Forex Backtesting Script - EUR/USD Golden/Death Cross Strategy
-20-hour / 50-hour Moving Average Crossover
+Forex Backtesting Script - USD/CAD Golden/Death Cross Strategy
+10-hour / 30-hour Moving Average Crossover with ADX Momentum Filter
 Period: November 1, 2023 to November 1, 2024
 Stop Loss: 2%
+Momentum Filter: ADX > 25 (only trade in strong trends)
 """
 
 from ib_insync import *
@@ -33,7 +34,7 @@ class ForexBacktester:
             print("Paper trading typically uses port 7497")
             return False
     
-    def fetch_historical_data(self, symbol='EUR', currency='USD'):
+    def fetch_historical_data(self, symbol='USD', currency='CAD'):
         """Fetch hourly data from Nov 1, 2023 to Nov 1, 2024"""
         forex = Forex(symbol + currency)
         self.ib.qualifyContracts(forex)
@@ -56,15 +57,55 @@ class ForexBacktester:
         print(f"Fetched {len(df)} hourly bars")
         return df
     
-    def calculate_signals(self, df):
-        """Calculate 20/50 MA and generate crossover signals"""
-        df['MA_20'] = df['close'].rolling(window=20).mean()
-        df['MA_50'] = df['close'].rolling(window=50).mean()
+    def calculate_adx(self, df, period=14):
+        """Calculate Average Directional Index (ADX) for trend strength"""
+        # Calculate True Range
+        df['H-L'] = df['high'] - df['low']
+        df['H-PC'] = abs(df['high'] - df['close'].shift(1))
+        df['L-PC'] = abs(df['low'] - df['close'].shift(1))
+        df['TR'] = df[['H-L', 'H-PC', 'L-PC']].max(axis=1)
         
-        # Generate signals
+        # Calculate Directional Movement
+        df['DMplus'] = np.where((df['high'] - df['high'].shift(1)) > (df['low'].shift(1) - df['low']),
+                                df['high'] - df['high'].shift(1), 0)
+        df['DMplus'] = np.where(df['DMplus'] < 0, 0, df['DMplus'])
+        
+        df['DMminus'] = np.where((df['low'].shift(1) - df['low']) > (df['high'] - df['high'].shift(1)),
+                                 df['low'].shift(1) - df['low'], 0)
+        df['DMminus'] = np.where(df['DMminus'] < 0, 0, df['DMminus'])
+        
+        # Calculate smoothed TR and DM
+        df['TR_smooth'] = df['TR'].rolling(window=period).sum()
+        df['DMplus_smooth'] = df['DMplus'].rolling(window=period).sum()
+        df['DMminus_smooth'] = df['DMminus'].rolling(window=period).sum()
+        
+        # Calculate Directional Indicators
+        df['DIplus'] = 100 * (df['DMplus_smooth'] / df['TR_smooth'])
+        df['DIminus'] = 100 * (df['DMminus_smooth'] / df['TR_smooth'])
+        
+        # Calculate DX and ADX
+        df['DX'] = 100 * abs(df['DIplus'] - df['DIminus']) / (df['DIplus'] + df['DIminus'])
+        df['ADX'] = df['DX'].rolling(window=period).mean()
+        
+        # Clean up temporary columns
+        df.drop(['H-L', 'H-PC', 'L-PC', 'TR', 'DMplus', 'DMminus', 
+                'TR_smooth', 'DMplus_smooth', 'DMminus_smooth', 
+                'DIplus', 'DIminus', 'DX'], axis=1, inplace=True)
+        
+        return df
+    
+    def calculate_signals(self, df):
+        """Calculate 10/30 MA and generate crossover signals with ADX filter"""
+        df['MA_10'] = df['close'].rolling(window=10).mean()
+        df['MA_30'] = df['close'].rolling(window=30).mean()
+        
+        # Calculate ADX for momentum filtering
+        df = self.calculate_adx(df, period=14)
+        
+        # Generate signals only when ADX > 25 (strong trend)
         df['signal'] = 0
-        df.loc[df['MA_20'] > df['MA_50'], 'signal'] = 1  # Golden cross - go long
-        df.loc[df['MA_20'] < df['MA_50'], 'signal'] = -1  # Death cross - go short
+        df.loc[(df['MA_10'] > df['MA_30']) & (df['ADX'] > 25), 'signal'] = 1  # Golden cross with strong trend
+        df.loc[(df['MA_10'] < df['MA_30']) & (df['ADX'] > 25), 'signal'] = -1  # Death cross with strong trend
         
         # Detect crossovers (when signal changes)
         df['position'] = df['signal'].diff()
@@ -135,12 +176,13 @@ class ForexBacktester:
         print("="*60)
         print(f"Initial Capital: ${self.initial_capital:,.2f}")
         print(f"Position Size: {self.position_size:,} units (mini lot)")
-        print(f"Strategy: 20/50 Hour MA Crossover")
+        print(f"Strategy: 10/30 Hour MA Crossover with ADX Filter")
+        print(f"Momentum Filter: ADX > 25")
         print(f"Stop Loss: 2%")
         print("="*60 + "\n")
         
-        # Start after we have 50 periods for MA calculation
-        for i in range(50, len(df)):
+        # Start after we have 30 periods for MA calculation + 14 for ADX
+        for i in range(44, len(df)):
             current_row = df.iloc[i]
             date = current_row['date']
             price = current_row['close']
@@ -239,7 +281,7 @@ def main():
     
     try:
         # Fetch historical data
-        df = backtester.fetch_historical_data('EUR', 'USD')
+        df = backtester.fetch_historical_data('USD', 'CAD')
         
         # Calculate signals
         df = backtester.calculate_signals(df)
