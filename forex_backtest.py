@@ -1,9 +1,10 @@
 """
 Forex Backtesting Script - USD/CAD Golden/Death Cross Strategy
-10-hour / 30-hour Moving Average Crossover with ADX Momentum Filter
+50-hour / 200-hour Moving Average Crossover with Enhanced Filters
 Period: November 1, 2023 to November 1, 2024
-Stop Loss: 2%
-Momentum Filter: ADX > 25 (only trade in strong trends)
+Stop Loss: 3%
+Momentum Filter: ADX > 30 (only trade in very strong trends)
+MA Spread Filter: MAs must be at least 0.5% apart (avoid weak trends)
 """
 
 from ib_insync import *
@@ -95,17 +96,22 @@ class ForexBacktester:
         return df
     
     def calculate_signals(self, df):
-        """Calculate 10/30 MA and generate crossover signals with ADX filter"""
-        df['MA_10'] = df['close'].rolling(window=10).mean()
-        df['MA_30'] = df['close'].rolling(window=30).mean()
+        """Calculate 50/200 MA and generate crossover signals with ADX and MA spread filters"""
+        df['MA_50'] = df['close'].rolling(window=50).mean()
+        df['MA_200'] = df['close'].rolling(window=200).mean()
         
         # Calculate ADX for momentum filtering
         df = self.calculate_adx(df, period=14)
         
-        # Generate signals only when ADX > 25 (strong trend)
+        # Calculate MA spread (percentage difference)
+        df['MA_spread'] = abs(df['MA_50'] - df['MA_200']) / df['MA_200'] * 100
+        
+        # Generate signals only when:
+        # 1. ADX > 30 (very strong trend)
+        # 2. MA spread > 0.5% (MAs are sufficiently separated)
         df['signal'] = 0
-        df.loc[(df['MA_10'] > df['MA_30']) & (df['ADX'] > 25), 'signal'] = 1  # Golden cross with strong trend
-        df.loc[(df['MA_10'] < df['MA_30']) & (df['ADX'] > 25), 'signal'] = -1  # Death cross with strong trend
+        df.loc[(df['MA_50'] > df['MA_200']) & (df['ADX'] > 30) & (df['MA_spread'] > 0.5), 'signal'] = 1
+        df.loc[(df['MA_50'] < df['MA_200']) & (df['ADX'] > 30) & (df['MA_spread'] > 0.5), 'signal'] = -1
         
         # Detect crossovers (when signal changes)
         df['position'] = df['signal'].diff()
@@ -113,13 +119,13 @@ class ForexBacktester:
         return df
     
     def check_stop_loss(self, current_price):
-        """Check if 2% stop loss is hit"""
+        """Check if 3% stop loss is hit"""
         if self.position == 'long':
-            stop_price = self.entry_price * 0.98  # 2% below entry
+            stop_price = self.entry_price * 0.97  # 3% below entry
             if current_price <= stop_price:
                 return True
         elif self.position == 'short':
-            stop_price = self.entry_price * 1.02  # 2% above entry
+            stop_price = self.entry_price * 1.03  # 3% above entry
             if current_price >= stop_price:
                 return True
         return False
@@ -176,13 +182,14 @@ class ForexBacktester:
         print("="*60)
         print(f"Initial Capital: ${self.initial_capital:,.2f}")
         print(f"Position Size: {self.position_size:,} units (mini lot)")
-        print(f"Strategy: 10/30 Hour MA Crossover with ADX Filter")
-        print(f"Momentum Filter: ADX > 25")
-        print(f"Stop Loss: 2%")
+        print(f"Strategy: 50/200 Hour MA Crossover")
+        print(f"Momentum Filter: ADX > 30")
+        print(f"MA Spread Filter: MAs must be 0.5%+ apart")
+        print(f"Stop Loss: 3%")
         print("="*60 + "\n")
         
-        # Start after we have 30 periods for MA calculation + 14 for ADX
-        for i in range(44, len(df)):
+        # Start after we have 200 periods for MA calculation + 14 for ADX
+        for i in range(214, len(df)):
             current_row = df.iloc[i]
             date = current_row['date']
             price = current_row['close']
