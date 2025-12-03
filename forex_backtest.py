@@ -1,10 +1,11 @@
 """
-Multi-Asset Portfolio Backtesting Script - PURE CROSSOVER MODE
-Assets: EUR/USD, USD/CAD, GBP/USD, AUD/USD, USD/JPY
-Strategy: 50/200 Hour MA Crossover - NO FILTERS
+Mean Reversion Portfolio Backtesting Script
+Strategy: RSI + Bollinger Bands Mean Reversion
+Assets: 12 Forex Pairs (Majors, Crosses, Emerging Markets)
 Period: November 1, 2021 to November 1, 2022
 Stop Loss: 3%
-NO ADX FILTER - NO MA SPREAD FILTER - FULL YOLO
+Entry: RSI < 30 + Price at lower BB (BUY) OR RSI > 70 + Price at upper BB (SHORT)
+Exit: Price reaches middle BB OR opposite signal OR stop loss
 Position Sizing: Max 3 positions, ~$3,333 per trade
 """
 
@@ -13,7 +14,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 
-class PortfolioBacktester:
+class MeanReversionBacktester:
     def __init__(self, initial_capital=10000, max_positions=3):
         self.initial_capital = initial_capital
         self.max_positions = max_positions
@@ -24,13 +25,23 @@ class PortfolioBacktester:
         self.equity_curve = []
         self.ib = None
         
-        # Asset definitions - forex pairs only
+        # 12 forex pairs - majors, crosses, and emerging markets
         self.assets = {
-            'EUR/USD': {'type': 'forex', 'symbol': 'EUR', 'currency': 'USD', 'pip_value': 1},
-            'USD/CAD': {'type': 'forex', 'symbol': 'USD', 'currency': 'CAD', 'pip_value': 1},
-            'GBP/USD': {'type': 'forex', 'symbol': 'GBP', 'currency': 'USD', 'pip_value': 1},
-            'AUD/USD': {'type': 'forex', 'symbol': 'AUD', 'currency': 'USD', 'pip_value': 1},
-            'USD/JPY': {'type': 'forex', 'symbol': 'USD', 'currency': 'JPY', 'pip_value': 1}
+            # Majors
+            'EUR/USD': {'symbol': 'EUR', 'currency': 'USD'},
+            'USD/CAD': {'symbol': 'USD', 'currency': 'CAD'},
+            'GBP/USD': {'symbol': 'GBP', 'currency': 'USD'},
+            'AUD/USD': {'symbol': 'AUD', 'currency': 'USD'},
+            'USD/JPY': {'symbol': 'USD', 'currency': 'JPY'},
+            'USD/CHF': {'symbol': 'USD', 'currency': 'CHF'},
+            'NZD/USD': {'symbol': 'NZD', 'currency': 'USD'},
+            # Crosses
+            'EUR/GBP': {'symbol': 'EUR', 'currency': 'GBP'},
+            'EUR/JPY': {'symbol': 'EUR', 'currency': 'JPY'},
+            'GBP/JPY': {'symbol': 'GBP', 'currency': 'JPY'},
+            # Emerging Markets
+            'USD/MXN': {'symbol': 'USD', 'currency': 'MXN'},
+            'USD/ZAR': {'symbol': 'USD', 'currency': 'ZAR'}
         }
         
     def connect_tws(self, port=7497):
@@ -71,53 +82,56 @@ class PortfolioBacktester:
             print(f"  {asset_name}: Error fetching data - {e}")
             return None
     
-    def calculate_adx(self, df, period=14):
-        """Calculate Average Directional Index"""
-        df['H-L'] = df['high'] - df['low']
-        df['H-PC'] = abs(df['high'] - df['close'].shift(1))
-        df['L-PC'] = abs(df['low'] - df['close'].shift(1))
-        df['TR'] = df[['H-L', 'H-PC', 'L-PC']].max(axis=1)
+    def calculate_rsi(self, df, period=14):
+        """Calculate RSI (Relative Strength Index)"""
+        delta = df['close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
         
-        df['DMplus'] = np.where((df['high'] - df['high'].shift(1)) > (df['low'].shift(1) - df['low']),
-                                df['high'] - df['high'].shift(1), 0)
-        df['DMplus'] = np.where(df['DMplus'] < 0, 0, df['DMplus'])
+        rs = gain / loss
+        rsi = 100 - (100 / (1 + rs))
         
-        df['DMminus'] = np.where((df['low'].shift(1) - df['low']) > (df['high'] - df['high'].shift(1)),
-                                 df['low'].shift(1) - df['low'], 0)
-        df['DMminus'] = np.where(df['DMminus'] < 0, 0, df['DMminus'])
-        
-        df['TR_smooth'] = df['TR'].rolling(window=period).sum()
-        df['DMplus_smooth'] = df['DMplus'].rolling(window=period).sum()
-        df['DMminus_smooth'] = df['DMminus'].rolling(window=period).sum()
-        
-        df['DIplus'] = 100 * (df['DMplus_smooth'] / df['TR_smooth'])
-        df['DIminus'] = 100 * (df['DMminus_smooth'] / df['TR_smooth'])
-        
-        df['DX'] = 100 * abs(df['DIplus'] - df['DIminus']) / (df['DIplus'] + df['DIminus'])
-        df['ADX'] = df['DX'].rolling(window=period).mean()
-        
-        df.drop(['H-L', 'H-PC', 'L-PC', 'TR', 'DMplus', 'DMminus', 
-                'TR_smooth', 'DMplus_smooth', 'DMminus_smooth', 
-                'DIplus', 'DIminus', 'DX'], axis=1, inplace=True)
+        return rsi
+    
+    def calculate_bollinger_bands(self, df, period=20, std_dev=2):
+        """Calculate Bollinger Bands"""
+        df['BB_middle'] = df['close'].rolling(window=period).mean()
+        rolling_std = df['close'].rolling(window=period).std()
+        df['BB_upper'] = df['BB_middle'] + (rolling_std * std_dev)
+        df['BB_lower'] = df['BB_middle'] - (rolling_std * std_dev)
         
         return df
     
     def calculate_signals(self, df):
-        """Calculate signals - PURE MA CROSSOVER, NO FILTERS"""
-        df['MA_50'] = df['close'].rolling(window=50).mean()
-        df['MA_200'] = df['close'].rolling(window=200).mean()
+        """Calculate mean reversion signals using RSI + Bollinger Bands"""
+        # Calculate indicators
+        df['RSI'] = self.calculate_rsi(df, period=14)
+        df = self.calculate_bollinger_bands(df, period=20, std_dev=2)
         
-        # Pure signals - no ADX, no spread filter, just crossovers
+        # Calculate BB width for filtering (avoid trading in super tight ranges)
+        df['BB_width'] = (df['BB_upper'] - df['BB_lower']) / df['BB_middle'] * 100
+        
+        # Generate signals
         df['signal'] = 0
-        df.loc[df['MA_50'] > df['MA_200'], 'signal'] = 1   # Golden cross - LONG
-        df.loc[df['MA_50'] < df['MA_200'], 'signal'] = -1  # Death cross - SHORT
+        
+        # BUY signal: RSI < 30 (oversold) AND price near/below lower BB
+        # We'll say "near" means within 0.1% of lower BB
+        df['near_lower_bb'] = (df['close'] <= df['BB_lower'] * 1.001)
+        df.loc[(df['RSI'] < 30) & df['near_lower_bb'] & (df['BB_width'] > 0.5), 'signal'] = 1
+        
+        # SHORT signal: RSI > 70 (overbought) AND price near/above upper BB
+        df['near_upper_bb'] = (df['close'] >= df['BB_upper'] * 0.999)
+        df.loc[(df['RSI'] > 70) & df['near_upper_bb'] & (df['BB_width'] > 0.5), 'signal'] = -1
+        
+        # Exit signals: price crosses middle BB (mean reversion achieved)
+        df['at_middle_bb'] = (df['close'] >= df['BB_middle'] * 0.998) & (df['close'] <= df['BB_middle'] * 1.002)
         
         df['position_change'] = df['signal'].diff()
         
         return df
     
     def check_stop_loss(self, asset_name, current_price):
-        """Check if 3% stop loss is hit for a position"""
+        """Check if 3% stop loss is hit"""
         if asset_name not in self.positions:
             return False
             
@@ -131,6 +145,22 @@ class PortfolioBacktester:
             stop_price = position['entry_price'] * 1.03
             if current_price >= stop_price:
                 return True
+        return False
+    
+    def check_mean_reversion_exit(self, asset_name, current_row):
+        """Check if price has reverted to middle BB"""
+        if asset_name not in self.positions:
+            return False
+        
+        position = self.positions[asset_name]
+        
+        # Exit long if price reaches middle BB
+        if position['type'] == 'long' and current_row['at_middle_bb']:
+            return True
+        # Exit short if price reaches middle BB
+        elif position['type'] == 'short' and current_row['at_middle_bb']:
+            return True
+        
         return False
     
     def calculate_position_size(self, price, asset_name):
@@ -196,26 +226,27 @@ class PortfolioBacktester:
         self.trades.append(trade_record)
     
     def run_backtest(self, asset_data):
-        """Run portfolio backtest across all assets"""
+        """Run mean reversion backtest across all assets"""
         print("\n" + "="*70)
-        print("STARTING PORTFOLIO BACKTEST - PURE CROSSOVER MODE")
+        print("STARTING MEAN REVERSION BACKTEST")
         print("="*70)
         print(f"Initial Capital: ${self.initial_capital:,.2f}")
         print(f"Max Positions: {self.max_positions}")
         print(f"Position Size: ${self.position_size_per_trade:,.2f} per trade")
-        print(f"Assets: {', '.join(asset_data.keys())}")
-        print(f"Strategy: 50/200 Hour MA Crossover - NO FILTERS")
-        print(f"Stop Loss: 3%")
+        print(f"Assets: {len(asset_data)} pairs")
+        print(f"Strategy: RSI (14) + Bollinger Bands (20, 2σ)")
+        print(f"Entry: RSI<30 at lower BB (buy) | RSI>70 at upper BB (short)")
+        print(f"Exit: Price reverts to middle BB OR stop loss (3%)")
         print("="*70 + "\n")
         
         # Find common date range across all assets
         min_length = min(len(df) for df in asset_data.values())
         
         # Process bar by bar across all assets
-        for i in range(200, min_length):  # Start after 200 MA period
+        for i in range(20, min_length):  # Start after 20 periods for BB calculation
             current_date = None
             
-            # First, check stop losses for all existing positions
+            # First, check stop losses and mean reversion exits for all existing positions
             for asset_name in list(self.positions.keys()):
                 df = asset_data[asset_name]
                 if i < len(df):
@@ -223,11 +254,19 @@ class PortfolioBacktester:
                     current_date = current_row['date']
                     price = current_row['close']
                     
+                    # Check stop loss
                     if self.check_stop_loss(asset_name, price):
                         if self.positions[asset_name]['type'] == 'long':
                             self.execute_trade(current_date, asset_name, price, 'SELL', 'Stop Loss')
                         else:
                             self.execute_trade(current_date, asset_name, price, 'COVER', 'Stop Loss')
+                    
+                    # Check mean reversion exit
+                    elif self.check_mean_reversion_exit(asset_name, current_row):
+                        if self.positions[asset_name]['type'] == 'long':
+                            self.execute_trade(current_date, asset_name, price, 'SELL', 'Mean Reversion - Middle BB')
+                        else:
+                            self.execute_trade(current_date, asset_name, price, 'COVER', 'Mean Reversion - Middle BB')
             
             # Then check for new signals across all assets
             for asset_name, df in asset_data.items():
@@ -238,18 +277,16 @@ class PortfolioBacktester:
                 current_date = current_row['date']
                 price = current_row['close']
                 
-                # Check for crossover signals
-                if current_row['position_change'] == 2:  # Golden cross
-                    if asset_name in self.positions and self.positions[asset_name]['type'] == 'short':
-                        self.execute_trade(current_date, asset_name, price, 'COVER', 'Signal Reversal')
-                    if asset_name not in self.positions:
-                        self.execute_trade(current_date, asset_name, price, 'BUY', 'Golden Cross')
+                # Skip if we already have a position in this asset
+                if asset_name in self.positions:
+                    continue
+                
+                # Check for entry signals
+                if current_row['signal'] == 1:  # Oversold - BUY signal
+                    self.execute_trade(current_date, asset_name, price, 'BUY', 'RSI Oversold at Lower BB')
                         
-                elif current_row['position_change'] == -2:  # Death cross
-                    if asset_name in self.positions and self.positions[asset_name]['type'] == 'long':
-                        self.execute_trade(current_date, asset_name, price, 'SELL', 'Signal Reversal')
-                    if asset_name not in self.positions:
-                        self.execute_trade(current_date, asset_name, price, 'SHORT', 'Death Cross')
+                elif current_row['signal'] == -1:  # Overbought - SHORT signal
+                    self.execute_trade(current_date, asset_name, price, 'SHORT', 'RSI Overbought at Upper BB')
             
             # Track equity
             if current_date:
@@ -270,7 +307,7 @@ class PortfolioBacktester:
     def print_results(self):
         """Print comprehensive results"""
         print("\n" + "="*70)
-        print("PORTFOLIO BACKTEST RESULTS")
+        print("MEAN REVERSION BACKTEST RESULTS")
         print("="*70)
         
         total_return = self.capital - self.initial_capital
@@ -297,6 +334,10 @@ class PortfolioBacktester:
                 avg_loss = np.mean([t['pnl'] for t in losing_trades])
                 print(f"Average Loss: ${avg_loss:.2f}")
             
+            if winning_trades and losing_trades:
+                profit_factor = abs(sum([t['pnl'] for t in winning_trades]) / sum([t['pnl'] for t in losing_trades]))
+                print(f"Profit Factor: {profit_factor:.2f}")
+            
             # Performance by asset
             print("\n" + "-"*70)
             print("PERFORMANCE BY ASSET")
@@ -307,7 +348,9 @@ class PortfolioBacktester:
                     asset_pnl = sum([t['pnl'] for t in asset_trades])
                     asset_wins = len([t for t in asset_trades if t['pnl'] > 0])
                     asset_win_rate = (asset_wins / len(asset_trades) * 100) if asset_trades else 0
-                    print(f"{asset_name:12} | Trades: {len(asset_trades):2} | P&L: ${asset_pnl:8.2f} | Win Rate: {asset_win_rate:5.1f}%")
+                    print(f"{asset_name:12} | Trades: {len(asset_trades):3} | P&L: ${asset_pnl:9.2f} | Win Rate: {asset_win_rate:5.1f}%")
+                else:
+                    print(f"{asset_name:12} | No trades")
             
             # Max drawdown
             if self.equity_curve:
@@ -334,19 +377,19 @@ class PortfolioBacktester:
 
 
 def main():
-    backtester = PortfolioBacktester(initial_capital=10000, max_positions=3)
+    backtester = MeanReversionBacktester(initial_capital=10000, max_positions=3)
     
     if not backtester.connect_tws(port=7497):
         return
     
     try:
         # Fetch data for all assets
-        print("\nFetching historical data for all assets...")
+        print("\nFetching historical data for all 12 forex pairs...")
         asset_data = {}
         
         for asset_name in backtester.assets.keys():
             df = backtester.fetch_historical_data(asset_name)
-            if df is not None and len(df) > 200:
+            if df is not None and len(df) > 20:
                 df = backtester.calculate_signals(df)
                 asset_data[asset_name] = df
         
